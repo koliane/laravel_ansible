@@ -1,0 +1,224 @@
+---
+- hosts: localhost
+  connection: local
+  vars:  
+    project_name: site
+    web_space_path: /var/www
+    db_name: sitedb
+    db_user_name: site
+    db_user_password: 12345678
+    project_owner: www-data
+    project_group: www-data
+    
+    project_path: '{{web_space_path + "/" + project_name}}'
+    
+  tasks:  
+    - name: Update and Upgrade
+      become: yes
+      apt:
+        upgrade: full
+        update_cache: yes
+        
+    - name: Install Git
+      become: yes
+      apt:
+        name: git
+        state: present 
+      tags: [ php, laravel ]
+      
+    - name: Create Site Directory
+      become: yes
+      ansible.builtin.file:
+        path: '{{ project_path }}'
+        state: directory
+        mode: '0755'   
+
+    - name: Add a project group to the current user
+      become: yes
+      ansible.builtin.user:
+        name: "{{ ansible_user_id }}"
+        groups: "{{ project_group }}"
+        append: yes
+        
+        
+    ### PHP       
+    - name: Add php repository
+      become: yes
+      ansible.builtin.apt_repository:
+        repo: ppa:ondrej/php
+        state: present
+        update_cache: true
+      tags: [ php ]
+        
+      
+    - name: Install php packages
+      become: yes
+      apt:
+        pkg:
+        - php8.1
+        - php8.1-fpm
+        - php8.1-cli
+      tags: [ php ]
+        
+    - name: Install php laravel packages
+      become: yes
+      apt:
+        name: "{{ item }}"
+        state: present 
+      loop:
+        - php8.1-xml
+        - php8.1-mbstring
+        - php8.1-curl
+        - zip
+        - unzip
+        - php8.1-pgsql
+      tags: [ php, laravel ]
+      
+    - name: Enable PDO for postgres
+      become: yes
+      lineinfile:
+        dest: "{{ item.location }}"
+        regexp: "{{ item.reg }}"
+        line: "{{ item.line }}"
+      loop:
+        - { location: '/etc/php/8.1/cli/php.ini', reg: '^;extension=pdo_pgsql', line: 'extension=pdo_pgsql'}
+        - { location: '/etc/php/8.1/cli/php.ini', reg: '^;extension=pgsql', line: 'extension=pgsql'}
+        - { location: '/etc/php/8.1/fpm/php.ini', reg: '^;extension=pdo_pgsql', line: 'extension=pdo_pgsql'}
+        - { location: '/etc/php/8.1/fpm/php.ini', reg: '^;extension=pgsql', line: 'extension=pgsql'}
+      tags: [ php, postgres ]
+    ### END PHP   
+        
+        
+    ### Composer       
+    - name: Download composer
+      get_url:
+        url: https://getcomposer.org/installer
+        dest: /tmp/composer-installer.php
+      tags: [ php, laravel ]
+        
+        
+    - name: Install composer
+      become: yes
+      shell: php /tmp/composer-installer.php --install-dir=/usr/local/bin --filename=composer
+      tags: [ php, laravel ]
+
+    - name: Remove composer installer
+      file:
+        path: /tmp/composer-installer.php
+        state: absent
+      tags: [ php, laravel ]
+    ### END Composer
+    
+        
+    ### Postgres   
+    - name: Create the Postgres repository configuration
+      shell: sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+      tags: [ postgres ]
+      
+    - name: Import the repository signing key
+      shell: wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+      tags: [ postgres ]
+      
+    - name: Update 
+      become: yes
+      apt:
+        update_cache: yes
+      tags: [ postgres ]
+    
+    - name: Install Postgres   
+      become: yes    
+      apt:
+        name: postgresql
+        state: present 
+      tags: [ postgres ]
+        
+    - name: Create Postgres User
+      shell: sudo -u postgres psql -c "CREATE USER {{ db_user_name }} WITH PASSWORD '{{ db_user_password }}';"
+      tags: [ postgres ]
+      
+    - name: Create Postgres DB
+      shell: sudo -u postgres psql -c "create database {{ project_name }}db;" 
+      tags: [ postgres ]
+    ### END Postgres
+        
+        
+    ### Nginx
+    - name: Add nginx repository
+      become: yes
+      ansible.builtin.apt_repository:
+        repo: ppa:nginx/stable
+        state: present
+        update_cache: true
+      tags: [ nginx ]
+        
+    - name: Install nginx
+      become: yes
+      apt:
+        name: nginx 
+      tags: [ nginx ]
+        
+    - name: Enable nginx should start on boot
+      become: yes
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: yes
+      tags: [ nginx ]
+
+    - name: Configure nginx
+      become: yes
+      template:
+        src=templates/nginx/available_site_default.conf
+        dest=/etc/nginx/sites-available/default
+      tags: [ nginx ]
+        
+    - name: restart nginx
+      shell: sudo systemctl reload nginx
+      tags: [ nginx ]
+    ### END Nginx
+    
+    
+    ### Laravel   
+    - name: Install Laravel
+      become: yes
+      shell: composer create-project laravel/laravel {{ project_name }}
+      args:
+        chdir: "{{ web_space_path }}"
+      tags: [ laravel ]
+        
+    - name: Write DB Credentials to .env file
+      become: yes
+      lineinfile:
+        dest: "{{ project_path }}/.env"
+        regexp: "{{ item.reg }}"
+        line: "{{ item.line }}"
+      loop:
+        - { reg: '^DB_CONNECTION=', line: 'DB_CONNECTION=pgsql'}
+        - { reg: '^DB_HOST=', line: 'DB_HOST=127.0.0.1'}
+        - { reg: '^DB_PORT=', line: 'DB_PORT=5432'}
+        - { reg: '^DB_DATABASE=', line: 'DB_DATABASE={{db_name}}'}
+        - { reg: '^DB_USERNAME=', line: 'DB_USERNAME={{ db_user_name }}'}
+        - { reg: '^DB_PASSWORD=', line: 'DB_PASSWORD={{ db_user_password }}'}
+      tags: [ laravel ]
+        
+    - name: Change database default config host
+      become: yes
+      ansible.builtin.replace:
+        dest: "{{ project_path }}/config/database.php"
+        after: "DB_CONNECTION',"
+        before: "connections"
+        regexp: "mysql"
+        replace: 'pgsql'
+      tags: [ laravel ]
+    ### END Laravel   
+    
+    
+    - name: Change WEB directory Owner and Group
+      shell: sudo chown -R {{ project_owner }}:{{ project_group }} {{ project_path }}/
+
+    
+    
+        
+      
+      
+        
+        

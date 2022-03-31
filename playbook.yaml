@@ -130,7 +130,7 @@
       tags: [ postgres ]
       
     - name: Create Postgres DB
-      shell: sudo -u postgres psql -c "create database {{ project_name }}db;" 
+      shell: sudo -u postgres psql -c "create database {{ db_name }};" 
       tags: [ postgres ]
     ### END Postgres
         

@@ -7,9 +7,9 @@
     db_name: sitedb
     db_user_name: site
     db_user_password: 12345678
-    project_owner: www-data
     project_group: www-data
     
+    project_owner: '{{ ansible_user_id }}'
     project_path: '{{web_space_path + "/" + project_name}}'
     
   tasks:  
@@ -31,14 +31,7 @@
       ansible.builtin.file:
         path: '{{ project_path }}'
         state: directory
-        mode: '0755'   
-
-    - name: Add a project group to the current user
-      become: yes
-      ansible.builtin.user:
-        name: "{{ ansible_user_id }}"
-        groups: "{{ project_group }}"
-        append: yes
+        mode: '0755'
         
         
     ### PHP       
@@ -214,6 +207,13 @@
     
     - name: Change WEB directory Owner and Group
       shell: sudo chown -R {{ project_owner }}:{{ project_group }} {{ project_path }}/
+      
+    - name: Give Write rights to storage folder
+      ansible.builtin.file:
+        path: '{{ project_path + "/storage"}}'
+        state: directory
+        recurse: yes
+        mode: g+w
 
     
     

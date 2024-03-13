@@ -132,6 +132,10 @@
     - name: Create Postgres DB
       shell: sudo -u postgres psql -c "create database {{ db_name }};" 
       tags: [ postgres ]
+
+    - name: Set DB owner
+      shell: sudo -u postgres psql -c "ALTER DATABASE {{ db_name }} OWNER TO {{ db_user_name }};" 
+      tags: [ postgres ]
     ### END Postgres
         
         
